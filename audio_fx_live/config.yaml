@@ -1,0 +1,51 @@
+# Audio FX Live Configuration
+
+audio:
+  # Sample rate in Hz
+  sample_rate: 48000
+
+  # Buffer size in samples
+  # Smaller = lower latency but higher CPU
+  # 512 @ 48kHz = ~10.7ms latency
+  buffer_size: 512
+
+  # Audio channels (1 = mono, 2 = stereo)
+  channels: 2
+
+  # Input device (-1 = default)
+  # Use: python main.py --list-devices
+  input_device: -1
+
+  # Output device (-1 = default)
+  output_device: -1
+
+effects:
+  delay:
+    # Delay time in milliseconds
+    delay_ms: 200
+
+    # Feedback amount (0.0-0.99)
+    # Higher = longer repeats
+    feedback: 0.4
+
+    # Wet/dry mix (0.0-1.0)
+    # 0 = fully dry, 1 = fully wet
+    wet: 0.3
+
+visualization:
+  # Enable waveform visualization
+  enabled: false
+
+  # FFT size for spectrum (should be power of 2)
+  fft_size: 512
+
+  # Update interval in milliseconds
+  update_interval: 50
+
+performance:
+  # Warn if processing time exceeds this % of buffer time
+  # Default 50% = 5.4ms @ 512 samples 48kHz
+  cpu_warn_threshold_pct: 50
+
+  # Drop visualizer frames if queue exceeds this size
+  visualizer_max_queue: 5
