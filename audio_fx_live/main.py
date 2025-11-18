@@ -12,6 +12,7 @@ import time
 from core.engine import AudioEngine
 from effects.delay import SimpleDelay
 from visualizers.waveform import WaveformVisualizer
+from visualizers.spectrogram import SpectrogramVisualizer
 
 
 def list_devices():
@@ -40,7 +41,7 @@ def print_controls():
     print()
 
 
-def run_interactive(input_device: int, output_device: int, buffer_size: int, with_visualizer: bool):
+def run_interactive(input_device: int, output_device: int, buffer_size: int, with_visualizer: bool, visualizer_type: str = "waveform"):
     """Run interactive pass-through with effects and controls."""
     engine = AudioEngine(
         buffer_size=buffer_size,
@@ -62,7 +63,10 @@ def run_interactive(input_device: int, output_device: int, buffer_size: int, wit
     viz = None
     viz_thread = None
     if with_visualizer:
-        viz = WaveformVisualizer(sample_rate=48000, name="Waveform")
+        if visualizer_type == "spectrogram":
+            viz = SpectrogramVisualizer(sample_rate=48000, name="Spectrogram")
+        else:
+            viz = WaveformVisualizer(sample_rate=48000, name="Waveform")
         engine.add_visualizer(viz)
 
     engine.start()
@@ -157,6 +161,7 @@ Examples:
   python main.py --list-devices
   python main.py --input 1 --output 3 --buffer 512
   python main.py --input -1 --output -1 --with-viz
+  python main.py --with-viz --viz-type spectrogram
   python main.py  # Uses default devices, no visualization
         """,
     )
@@ -178,7 +183,14 @@ Examples:
     parser.add_argument(
         "--with-viz",
         action="store_true",
-        help="Enable waveform visualization",
+        help="Enable visualization",
+    )
+    parser.add_argument(
+        "--viz-type",
+        type=str,
+        default="waveform",
+        choices=["waveform", "spectrogram"],
+        help="Visualizer type: waveform or spectrogram (default: waveform)",
     )
 
     args = parser.parse_args()
@@ -191,7 +203,7 @@ Examples:
     input_dev = None if args.input == -1 else args.input
     output_dev = None if args.output == -1 else args.output
 
-    run_interactive(input_dev, output_dev, args.buffer, args.with_viz)
+    run_interactive(input_dev, output_dev, args.buffer, args.with_viz, args.viz_type)
 
 
 if __name__ == "__main__":

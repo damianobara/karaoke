@@ -1,3 +1,4 @@
 from .waveform import WaveformVisualizer
+from .spectrogram import SpectrogramVisualizer
 
-__all__ = ["WaveformVisualizer"]
+__all__ = ["WaveformVisualizer", "SpectrogramVisualizer"]
