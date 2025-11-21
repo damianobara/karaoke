@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import signal
 from core.effect import EffectBase
 
 
@@ -6,7 +7,7 @@ class SimpleReverb(EffectBase):
     """Simple reverb effect using multiple delay lines (Schroeder reverb).
 
     Simulates room acoustics with comb filters and all-pass filters.
-    All operations are numpy vectorized for real-time performance.
+    All operations are numpy vectorized using scipy.signal.lfilter.
     """
 
     def __init__(
@@ -27,23 +28,60 @@ class SimpleReverb(EffectBase):
         base_delays = [1557, 1617, 1491, 1422, 1277, 1356, 1188, 1116]
         self.comb_delays = [int(d * (0.5 + room_size * 1.5)) for d in base_delays]
 
-        # Initialize comb filter buffers
-        self.comb_buffers = [
-            np.zeros(delay, dtype=np.float32) for delay in self.comb_delays
-        ]
-        self.comb_filter_states = [0.0] * len(self.comb_delays)
-        self.comb_positions = [0] * len(self.comb_delays)
-
         # All-pass filter delays
-        allpass_delays = [225, 556, 441, 341]
-        self.allpass_delays = allpass_delays
-        self.allpass_buffers = [
-            np.zeros(delay, dtype=np.float32) for delay in allpass_delays
-        ]
-        self.allpass_positions = [0] * len(allpass_delays)
+        self.allpass_delays = [225, 556, 441, 341]
+
+        # Initialize filter coefficients and states
+        self._init_filters()
+
+    def _init_filters(self):
+        """Initialize IIR filter coefficients for comb and allpass filters."""
+        feedback = 0.84
+        damping_coef = self.damping
+
+        # Comb filters with damping (lowpass in feedback loop)
+        # H(z) = z^(-D) / (1 - g*(1-d + d*z^(-1))*z^(-D))
+        # Simplified: use lfilter with proper coefficients
+        self.comb_b = []
+        self.comb_a = []
+        self.comb_zi = []
+
+        for delay in self.comb_delays:
+            # Comb filter: y[n] = x[n-D] + g * lowpass(y[n-D])
+            # We approximate with a simpler IIR structure
+            b = np.zeros(delay + 1, dtype=np.float32)
+            b[delay] = 1.0
+
+            a = np.zeros(delay + 2, dtype=np.float32)
+            a[0] = 1.0
+            a[delay] = -feedback * (1 - damping_coef)
+            a[delay + 1] = -feedback * damping_coef
+
+            self.comb_b.append(b)
+            self.comb_a.append(a)
+            self.comb_zi.append(None)
+
+        # All-pass filters: H(z) = (-g + z^(-D)) / (1 - g*z^(-D))
+        self.allpass_b = []
+        self.allpass_a = []
+        self.allpass_zi = []
+        allpass_g = 0.5
+
+        for delay in self.allpass_delays:
+            b = np.zeros(delay + 1, dtype=np.float32)
+            b[0] = -allpass_g
+            b[delay] = 1.0
+
+            a = np.zeros(delay + 1, dtype=np.float32)
+            a[0] = 1.0
+            a[delay] = -allpass_g
+
+            self.allpass_b.append(b)
+            self.allpass_a.append(a)
+            self.allpass_zi.append(None)
 
     def process(self, audio: np.ndarray) -> np.ndarray:
-        """Apply reverb effect.
+        """Apply reverb effect using vectorized scipy.signal.lfilter.
 
         Args:
             audio: shape (frames, 2) or (frames,)
@@ -55,50 +93,43 @@ class SimpleReverb(EffectBase):
         if is_mono:
             audio = audio.reshape(-1, 1)
 
-        frames = audio.shape[0]
         output = np.zeros_like(audio)
 
         # Process each channel
         for ch in range(audio.shape[1]):
             channel_input = audio[:, ch]
-            channel_output = np.zeros(frames, dtype=np.float32)
 
-            # Process sample by sample for stateful filters
-            for i in range(frames):
-                sample = channel_input[i]
+            # Parallel comb filters - vectorized
+            comb_sum = np.zeros_like(channel_input)
+            for j in range(len(self.comb_delays)):
+                # Initialize filter state if needed
+                if self.comb_zi[j] is None:
+                    self.comb_zi[j] = signal.lfilter_zi(
+                        self.comb_b[j], self.comb_a[j]
+                    ).astype(np.float32) * 0
 
-                # Comb filters (parallel)
-                comb_out = 0.0
-                for j, (buffer, delay) in enumerate(zip(self.comb_buffers, self.comb_delays)):
-                    # Read delayed sample
-                    delayed = buffer[self.comb_positions[j]]
+                comb_out, self.comb_zi[j] = signal.lfilter(
+                    self.comb_b[j], self.comb_a[j], channel_input, zi=self.comb_zi[j]
+                )
+                comb_sum += comb_out
 
-                    # Apply damping (simple lowpass)
-                    filtered = delayed * (1 - self.damping) + self.comb_filter_states[j] * self.damping
-                    self.comb_filter_states[j] = filtered
+            comb_sum /= len(self.comb_delays)
 
-                    # Write to buffer with feedback
-                    buffer[self.comb_positions[j]] = sample + filtered * 0.84
+            # Series all-pass filters for diffusion - vectorized
+            allpass_out = comb_sum
+            for j in range(len(self.allpass_delays)):
+                # Initialize filter state if needed
+                if self.allpass_zi[j] is None:
+                    self.allpass_zi[j] = signal.lfilter_zi(
+                        self.allpass_b[j], self.allpass_a[j]
+                    ).astype(np.float32) * 0
 
-                    # Update position
-                    self.comb_positions[j] = (self.comb_positions[j] + 1) % delay
+                allpass_out, self.allpass_zi[j] = signal.lfilter(
+                    self.allpass_b[j], self.allpass_a[j], allpass_out, zi=self.allpass_zi[j]
+                )
 
-                    comb_out += delayed
-
-                comb_out /= len(self.comb_buffers)
-
-                # All-pass filters (series) for diffusion
-                allpass_out = comb_out
-                for j, (buffer, delay) in enumerate(zip(self.allpass_buffers, self.allpass_delays)):
-                    delayed = buffer[self.allpass_positions[j]]
-                    buffer[self.allpass_positions[j]] = allpass_out + delayed * 0.5
-                    allpass_out = delayed - allpass_out * 0.5
-                    self.allpass_positions[j] = (self.allpass_positions[j] + 1) % delay
-
-                channel_output[i] = allpass_out
-
-            # Mix wet and dry
-            output[:, ch] = (1 - self.wet) * channel_input + self.wet * channel_output
+            # Mix wet and dry - vectorized
+            output[:, ch] = (1 - self.wet) * channel_input + self.wet * allpass_out
 
         if is_mono:
             output = output[:, 0]

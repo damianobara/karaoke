@@ -1,11 +1,12 @@
 import numpy as np
+from scipy import signal
 from core.effect import EffectBase
 
 
 class SimpleDelay(EffectBase):
     """Simple delay effect with feedback and wet/dry mix.
 
-    Uses ring buffer for efficient delay line.
+    Uses scipy.signal.lfilter for efficient vectorized delay processing.
     All operations are numpy vectorized (no Python loops on samples).
     Handles mono and stereo input automatically.
     """
@@ -24,14 +25,31 @@ class SimpleDelay(EffectBase):
         self.wet = np.clip(wet, 0, 1)
         self.sample_rate = sample_rate
 
-        # Pre-allocate ring buffers (stereo max)
-        delay_samples = int((delay_ms / 1000) * sample_rate)
-        self.delay_buffer_l = np.zeros(delay_samples, dtype=np.float32)
-        self.delay_buffer_r = np.zeros(delay_samples, dtype=np.float32)
-        self.write_pos = 0
+        # Calculate delay in samples
+        self.delay_samples = int((delay_ms / 1000) * sample_rate)
+
+        # Initialize filter state for lfilter (stereo)
+        self._init_filter_coefficients()
+        self.zi_l = None
+        self.zi_r = None
+
+    def _init_filter_coefficients(self):
+        """Initialize IIR filter coefficients for delay with feedback.
+
+        Delay with feedback: y[n] = x[n-D] + feedback * y[n-D]
+        Transfer function: H(z) = z^(-D) / (1 - feedback * z^(-D))
+        """
+        D = self.delay_samples
+        # b coefficients: [0, 0, ..., 0, 1] (D zeros, then 1)
+        self.b = np.zeros(D + 1, dtype=np.float32)
+        self.b[D] = 1.0
+        # a coefficients: [1, 0, 0, ..., 0, -feedback]
+        self.a = np.zeros(D + 1, dtype=np.float32)
+        self.a[0] = 1.0
+        self.a[D] = -self.feedback
 
     def process(self, audio: np.ndarray) -> np.ndarray:
-        """Apply delay effect.
+        """Apply delay effect using vectorized scipy.signal.lfilter.
 
         Args:
             audio: shape (frames, 2) or (frames,)
@@ -43,34 +61,28 @@ class SimpleDelay(EffectBase):
         if is_mono:
             audio = audio.reshape(-1, 1)
 
-        frames = audio.shape[0]
-        channels = audio.shape[1] if audio.ndim > 1 else 1
+        channels = audio.shape[1]
         dry = audio.copy()
         delayed = np.zeros_like(audio)
 
-        # Read from delay buffer
-        buffer_size = len(self.delay_buffer_l)
+        # Initialize filter state if needed
+        if self.zi_l is None:
+            self.zi_l = signal.lfilter_zi(self.b, self.a).astype(np.float32) * 0
+        if self.zi_r is None:
+            self.zi_r = signal.lfilter_zi(self.b, self.a).astype(np.float32) * 0
 
-        # Process sample by sample (simple but safe)
-        for i in range(frames):
-            read_pos = (self.write_pos - buffer_size) % buffer_size
+        # Process left channel - vectorized via lfilter
+        delayed[:, 0], self.zi_l = signal.lfilter(self.b, self.a, audio[:, 0], zi=self.zi_l)
 
-            # Left channel
-            delayed[i, 0] = self.delay_buffer_l[read_pos]
-            self.delay_buffer_l[self.write_pos] = audio[i, 0] + delayed[i, 0] * self.feedback
+        # Process right channel if stereo
+        if channels > 1:
+            delayed[:, 1], self.zi_r = signal.lfilter(self.b, self.a, audio[:, 1], zi=self.zi_r)
 
-            # Right channel - only process if stereo
-            if channels > 1:
-                delayed[i, 1] = self.delay_buffer_r[read_pos]
-                self.delay_buffer_r[self.write_pos] = audio[i, 1] + delayed[i, 1] * self.feedback
-
-            self.write_pos = (self.write_pos + 1) % buffer_size
-
-        # Mix dry and wet
+        # Mix dry and wet - vectorized
         output = (1 - self.wet) * dry + self.wet * delayed
 
         if is_mono:
-            output = output[:, 0]  # Extract first channel for mono
+            output = output[:, 0]
 
         return np.clip(output, -1.0, 1.0).astype(np.float32)
 
