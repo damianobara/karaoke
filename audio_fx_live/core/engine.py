@@ -42,10 +42,23 @@ class AudioEngine:
         self.running = False
 
         # Metrics
-        self.latency_ms = 0
+        self._latency_ms = 0
+        self._latency_lock = Lock()  # Protects latency_ms from race conditions
         self.processor_time_ms = 0
         self.total_frames = 0
         self.underruns = 0
+
+    @property
+    def latency_ms(self) -> float:
+        """Thread-safe accessor for latency_ms."""
+        with self._latency_lock:
+            return self._latency_ms
+
+    @latency_ms.setter
+    def latency_ms(self, value: float):
+        """Thread-safe setter for latency_ms."""
+        with self._latency_lock:
+            self._latency_ms = value
 
     def _audio_callback(self, indata, outdata, frames, time_info, status):
         """WASAPI callback - audio thread (ultra-low latency context).
