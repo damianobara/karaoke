@@ -39,6 +39,6 @@ class EffectBase(ABC):
             return audio
         try:
             return self.process(audio)
-        except Exception as e:
+        except (RuntimeError, ValueError, TypeError, FloatingPointError) as e:
             print(f"[ERROR] {self.name}: {e} - skipping effect")
             return audio

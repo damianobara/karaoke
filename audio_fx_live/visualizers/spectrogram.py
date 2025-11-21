@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from threading import Thread
+from queue import Empty
 from core.visualizer import VisualizerBase
 
 
@@ -85,7 +86,7 @@ class SpectrogramVisualizer(VisualizerBase):
                 # Add new spectrum at the end
                 self.spectrogram_data[-1, :] = power_db
 
-            except:
+            except Empty:
                 # Queue empty - no new data
                 pass
 
