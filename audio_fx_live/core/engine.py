@@ -93,10 +93,44 @@ class AudioEngine:
         self.processor_time_ms = proc_time
         self.total_frames += frames
 
+    def _validate_devices(self):
+        """Validate that specified audio devices exist and have required channels."""
+        devices = sd.query_devices()
+        num_devices = len(devices)
+
+        if self.input_device is not None:
+            if self.input_device < 0 or self.input_device >= num_devices:
+                raise ValueError(
+                    f"Invalid input device index: {self.input_device}. "
+                    f"Valid range is 0-{num_devices - 1}. "
+                    f"Use --list-devices to see available devices."
+                )
+            if devices[self.input_device]['max_input_channels'] < 1:
+                raise ValueError(
+                    f"Device {self.input_device} ('{devices[self.input_device]['name']}') "
+                    f"has no input channels. Please select an input device."
+                )
+
+        if self.output_device is not None:
+            if self.output_device < 0 or self.output_device >= num_devices:
+                raise ValueError(
+                    f"Invalid output device index: {self.output_device}. "
+                    f"Valid range is 0-{num_devices - 1}. "
+                    f"Use --list-devices to see available devices."
+                )
+            if devices[self.output_device]['max_output_channels'] < 1:
+                raise ValueError(
+                    f"Device {self.output_device} ('{devices[self.output_device]['name']}') "
+                    f"has no output channels. Please select an output device."
+                )
+
     def start(self):
         """Start audio stream."""
         if self.running:
             return
+
+        # Validate devices before creating stream
+        self._validate_devices()
 
         # Calculate latency (simplified: device latency + buffer)
         self.latency_ms = (self.buffer_size / self.sample_rate) * 1000 * 2
@@ -106,14 +140,17 @@ class AudioEngine:
         print(f"   Sample rate: {self.sample_rate} Hz")
         print(f"   Channels: {self.channels}")
 
-        self.stream = sd.Stream(
-            samplerate=self.sample_rate,
-            blocksize=self.buffer_size,
-            device=(self.input_device, self.output_device),
-            channels=self.channels,
-            callback=self._audio_callback,
-            dtype="float32",
-        )
+        try:
+            self.stream = sd.Stream(
+                samplerate=self.sample_rate,
+                blocksize=self.buffer_size,
+                device=(self.input_device, self.output_device),
+                channels=self.channels,
+                callback=self._audio_callback,
+                dtype="float32",
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to open audio stream: {e}")
 
         self.stream.start()
         self.running = True
