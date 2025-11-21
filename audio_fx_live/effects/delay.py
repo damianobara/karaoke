@@ -59,13 +59,10 @@ class SimpleDelay(EffectBase):
             delayed[i, 0] = self.delay_buffer_l[read_pos]
             self.delay_buffer_l[self.write_pos] = audio[i, 0] + delayed[i, 0] * self.feedback
 
-            # Right channel (if stereo)
+            # Right channel - only process if stereo
             if channels > 1:
                 delayed[i, 1] = self.delay_buffer_r[read_pos]
                 self.delay_buffer_r[self.write_pos] = audio[i, 1] + delayed[i, 1] * self.feedback
-            else:
-                delayed[i, 0] = self.delay_buffer_r[read_pos]
-                self.delay_buffer_r[self.write_pos] = audio[i, 0] + delayed[i, 0] * self.feedback
 
             self.write_pos = (self.write_pos + 1) % buffer_size
 
