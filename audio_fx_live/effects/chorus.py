@@ -37,7 +37,7 @@ class SimpleChorus(EffectBase):
         self.base_delay_samples = int(0.02 * sample_rate)
 
     def process(self, audio: np.ndarray) -> np.ndarray:
-        """Apply chorus effect.
+        """Apply chorus effect using vectorized numpy operations.
 
         Args:
             audio: shape (frames, 2) or (frames,)
@@ -51,57 +51,62 @@ class SimpleChorus(EffectBase):
 
         frames = audio.shape[0]
         channels = audio.shape[1]
-        output = np.zeros_like(audio)
         buffer_size = len(self.delay_buffer_l)
 
-        # LFO phase increment per sample
+        # Generate all LFO phases at once - vectorized
         phase_increment = 2 * np.pi * self.rate / self.sample_rate
+        lfo_phases = self.lfo_phase + np.arange(frames) * phase_increment
 
-        for i in range(frames):
-            # Generate LFO value (sine wave)
-            lfo_value = np.sin(self.lfo_phase)
-            self.lfo_phase += phase_increment
-            if self.lfo_phase >= 2 * np.pi:
-                self.lfo_phase -= 2 * np.pi
+        # Generate LFO values for left and right channels - vectorized
+        lfo_values_l = np.sin(lfo_phases)
+        lfo_values_r = np.sin(lfo_phases + np.pi * 0.5)  # Phase offset for stereo
 
-            # Calculate modulated delay time
-            modulation = lfo_value * self.depth * self.base_delay_samples * 0.5
-            delay_samples = self.base_delay_samples + modulation
+        # Update LFO phase for next block
+        self.lfo_phase = (lfo_phases[-1] + phase_increment) % (2 * np.pi) if frames > 0 else self.lfo_phase
 
-            # Calculate read position with fractional delay (linear interpolation)
-            read_pos_float = (self.write_pos - delay_samples) % buffer_size
-            read_pos_int = int(read_pos_float)
-            read_pos_next = (read_pos_int + 1) % buffer_size
-            frac = read_pos_float - read_pos_int
+        # Calculate modulated delay times - vectorized
+        modulation_l = lfo_values_l * self.depth * self.base_delay_samples * 0.5
+        modulation_r = lfo_values_r * self.depth * self.base_delay_samples * 0.5
+        delay_samples_l = self.base_delay_samples + modulation_l
+        delay_samples_r = self.base_delay_samples + modulation_r
 
-            # Left channel
-            delayed_l = self.delay_buffer_l[read_pos_int] * (1 - frac) + \
-                       self.delay_buffer_l[read_pos_next] * frac
-            self.delay_buffer_l[self.write_pos] = audio[i, 0]
+        # Calculate write positions for all samples - vectorized
+        write_positions = (self.write_pos + np.arange(frames)) % buffer_size
 
-            # Right channel (with slight phase offset for stereo width)
-            lfo_value_r = np.sin(self.lfo_phase + np.pi * 0.5)
-            modulation_r = lfo_value_r * self.depth * self.base_delay_samples * 0.5
-            delay_samples_r = self.base_delay_samples + modulation_r
+        # Calculate read positions with fractional delay - vectorized
+        read_pos_float_l = (write_positions - delay_samples_l) % buffer_size
+        read_pos_int_l = read_pos_float_l.astype(np.int32)
+        read_pos_next_l = (read_pos_int_l + 1) % buffer_size
+        frac_l = read_pos_float_l - read_pos_int_l
 
-            read_pos_float_r = (self.write_pos - delay_samples_r) % buffer_size
-            read_pos_int_r = int(read_pos_float_r)
-            read_pos_next_r = (read_pos_int_r + 1) % buffer_size
-            frac_r = read_pos_float_r - read_pos_int_r
+        read_pos_float_r = (write_positions - delay_samples_r) % buffer_size
+        read_pos_int_r = read_pos_float_r.astype(np.int32)
+        read_pos_next_r = (read_pos_int_r + 1) % buffer_size
+        frac_r = read_pos_float_r - read_pos_int_r
 
-            if channels > 1:
-                delayed_r = self.delay_buffer_r[read_pos_int_r] * (1 - frac_r) + \
-                           self.delay_buffer_r[read_pos_next_r] * frac_r
-                self.delay_buffer_r[self.write_pos] = audio[i, 1]
-            else:
-                delayed_r = delayed_l
+        # Read from delay buffers with linear interpolation - vectorized
+        delayed_l = (self.delay_buffer_l[read_pos_int_l] * (1 - frac_l) +
+                    self.delay_buffer_l[read_pos_next_l] * frac_l)
 
-            # Mix dry and wet
-            output[i, 0] = (1 - self.wet) * audio[i, 0] + self.wet * delayed_l
-            if channels > 1:
-                output[i, 1] = (1 - self.wet) * audio[i, 1] + self.wet * delayed_r
+        if channels > 1:
+            delayed_r = (self.delay_buffer_r[read_pos_int_r] * (1 - frac_r) +
+                        self.delay_buffer_r[read_pos_next_r] * frac_r)
+        else:
+            delayed_r = delayed_l
 
-            self.write_pos = (self.write_pos + 1) % buffer_size
+        # Write to delay buffers - vectorized
+        self.delay_buffer_l[write_positions] = audio[:, 0]
+        if channels > 1:
+            self.delay_buffer_r[write_positions] = audio[:, 1]
+
+        # Update write position for next block
+        self.write_pos = (self.write_pos + frames) % buffer_size
+
+        # Mix dry and wet - vectorized
+        output = np.zeros_like(audio)
+        output[:, 0] = (1 - self.wet) * audio[:, 0] + self.wet * delayed_l
+        if channels > 1:
+            output[:, 1] = (1 - self.wet) * audio[:, 1] + self.wet * delayed_r
 
         if is_mono:
             output = output[:, 0]

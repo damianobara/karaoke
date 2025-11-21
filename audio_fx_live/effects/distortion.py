@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import signal
 from core.effect import EffectBase
 
 
@@ -23,12 +24,23 @@ class SimpleDistortion(EffectBase):
         self.level = np.clip(level, 0, 1)
         self.sample_rate = sample_rate
 
-        # Simple lowpass filter for tone control
-        self.filter_state_l = 0.0
-        self.filter_state_r = 0.0
+        # Initialize filter state for lfilter (stereo)
+        self.zi_l = None
+        self.zi_r = None
+
+    def _get_filter_coefficients(self):
+        """Get one-pole lowpass filter coefficients based on tone setting.
+
+        One-pole lowpass: y[n] = (1-a)*y[n-1] + a*x[n]
+        Transfer function: H(z) = a / (1 - (1-a)*z^(-1))
+        """
+        filter_coef = 0.1 + self.tone * 0.8  # Range from heavy filtering to minimal
+        b = np.array([filter_coef], dtype=np.float32)
+        a = np.array([1.0, -(1 - filter_coef)], dtype=np.float32)
+        return b, a
 
     def process(self, audio: np.ndarray) -> np.ndarray:
-        """Apply distortion effect.
+        """Apply distortion effect using vectorized operations.
 
         Args:
             audio: shape (frames, 2) or (frames,)
@@ -40,35 +52,33 @@ class SimpleDistortion(EffectBase):
         if is_mono:
             audio = audio.reshape(-1, 1)
 
-        # Apply drive (pre-gain)
+        channels = audio.shape[1]
+
+        # Apply drive (pre-gain) - vectorized
         gained = audio * self.drive
 
-        # Soft clipping using tanh for smooth distortion
+        # Soft clipping using tanh for smooth distortion - vectorized
         distorted = np.tanh(gained)
 
-        # Tone control (simple one-pole lowpass filter)
-        # Higher tone value = brighter sound (less filtering)
-        filter_coef = 0.1 + self.tone * 0.8  # Range from heavy filtering to minimal
+        # Tone control using vectorized lfilter
+        b, a = self._get_filter_coefficients()
+
+        # Initialize filter states if needed
+        if self.zi_l is None:
+            self.zi_l = signal.lfilter_zi(b, a).astype(np.float32) * 0
+        if self.zi_r is None:
+            self.zi_r = signal.lfilter_zi(b, a).astype(np.float32) * 0
 
         output = np.zeros_like(distorted)
 
-        for ch in range(distorted.shape[1]):
-            if ch == 0:
-                filter_state = self.filter_state_l
-            else:
-                filter_state = self.filter_state_r
+        # Process left channel - vectorized via lfilter
+        output[:, 0], self.zi_l = signal.lfilter(b, a, distorted[:, 0], zi=self.zi_l)
 
-            # Apply simple lowpass filter sample by sample
-            for i in range(distorted.shape[0]):
-                filter_state = filter_state * (1 - filter_coef) + distorted[i, ch] * filter_coef
-                output[i, ch] = filter_state
+        # Process right channel if stereo
+        if channels > 1:
+            output[:, 1], self.zi_r = signal.lfilter(b, a, distorted[:, 1], zi=self.zi_r)
 
-            if ch == 0:
-                self.filter_state_l = filter_state
-            else:
-                self.filter_state_r = filter_state
-
-        # Apply output level
+        # Apply output level - vectorized
         output = output * self.level
 
         if is_mono:
