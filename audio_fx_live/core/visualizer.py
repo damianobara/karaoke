@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from queue import Queue
+from queue import Queue, Full
 import numpy as np
 
 
@@ -23,7 +23,7 @@ class VisualizerBase(ABC):
         """
         try:
             self.queue.put_nowait(audio.copy())
-        except:
+        except Full:
             # Queue full - drop frame, don't block audio
             pass
 

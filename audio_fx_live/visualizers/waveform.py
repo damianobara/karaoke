@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from threading import Thread
+from queue import Empty
 from core.visualizer import VisualizerBase
 
 
@@ -75,7 +76,7 @@ class WaveformVisualizer(VisualizerBase):
                 power_db = 20 * np.log10(power + 1e-10)
                 self.freq_data = power_db
 
-            except:
+            except Empty:
                 # Queue empty - no new data
                 pass
 
