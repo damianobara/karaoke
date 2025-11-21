@@ -9,6 +9,7 @@ import sounddevice as sd
 import sys
 import threading
 import time
+import matplotlib.pyplot as plt
 from core.engine import AudioEngine
 from effects.delay import SimpleDelay
 from visualizers.waveform import WaveformVisualizer
@@ -77,8 +78,7 @@ def run_interactive(input_device: int, output_device: int, buffer_size: int, wit
 
     # Start visualizer if enabled
     if viz:
-        viz_thread = threading.Thread(target=viz.run, daemon=True)
-        viz_thread.start()
+        viz_thread = viz.start_threaded()
         print("[OK] Visualizer started")
         print()
 
@@ -149,7 +149,10 @@ def run_interactive(input_device: int, output_device: int, buffer_size: int, wit
     finally:
         engine.stop()
         if viz:
-            viz.stop()
+            viz.stop_and_wait(timeout=2.0)
+        if viz_thread is not None and viz_thread.is_alive():
+            viz_thread.join(timeout=2.0)
+        plt.close('all')  # Clean up matplotlib figures
 
 
 def main():
