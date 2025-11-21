@@ -98,11 +98,8 @@ class AudioEngine:
         if self.running:
             return
 
-        # Calculate latency (simplified: device latency + buffer)
-        self.latency_ms = (self.buffer_size / self.sample_rate) * 1000 * 2
-
         print(f"\n[AudioEngine Starting]")
-        print(f"   Buffer: {self.buffer_size} samples ({self.latency_ms:.1f}ms latency)")
+        print(f"   Buffer: {self.buffer_size} samples")
         print(f"   Sample rate: {self.sample_rate} Hz")
         print(f"   Channels: {self.channels}")
 
@@ -117,6 +114,15 @@ class AudioEngine:
 
         self.stream.start()
         self.running = True
+
+        # Calculate accurate latency using actual device latency
+        if self.stream:
+            input_latency = self.stream.latency[0]   # seconds
+            output_latency = self.stream.latency[1]  # seconds
+            buffer_latency = self.buffer_size / self.sample_rate
+            total_latency_sec = input_latency + output_latency + buffer_latency
+            self.latency_ms = total_latency_sec * 1000
+
         print(f"[OK] Stream started (latency: {self.latency_ms:.1f}ms)")
 
     def stop(self):
